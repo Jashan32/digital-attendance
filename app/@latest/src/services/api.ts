@@ -412,4 +412,12 @@ export const attendanceAPI = {
     timestamp: string; 
     currentDateTime?: string; 
   }) => apiClient.post('/attendance/scan', data),
+  
+  updateManual: (data: {
+    rollNumber: string;
+    subjectName: string;
+    date: string;
+    status: 'PRESENT' | 'ABSENT' | 'LATE';
+    remarks?: string;
+  }) => apiClient.put('/attendance/update', data),
 };

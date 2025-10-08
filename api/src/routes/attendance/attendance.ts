@@ -91,11 +91,6 @@ router.post('/scan', async (req: Request, res: Response) => {
 
     // Find active timetable for student's branch and semester
     const activeTimetable = await prisma.timetable.findFirst({
-      where: {
-        branchId: student.branchId,
-        semester: student.semester,
-        isActive: true
-      }
     });
 
     if (!activeTimetable) {
@@ -292,7 +287,16 @@ router.get('/today', async (req: Request, res: Response) => {
     // Use simulation date from frontend, or server date as fallback
     let today: Date;
     if (currentDate) {
-      today = new Date(currentDate as string);
+      // Parse date string as YYYY-MM-DD and create UTC date to avoid timezone issues
+      const dateString = currentDate as string;
+      const dateParts = dateString.split('-');
+      if (dateParts.length !== 3) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid currentDate format. Use YYYY-MM-DD format'
+        });
+      }
+      today = new Date(Date.UTC(parseInt(dateParts[0]), parseInt(dateParts[1]) - 1, parseInt(dateParts[2])));
       if (isNaN(today.getTime())) {
         return res.status(400).json({
           success: false,
@@ -301,8 +305,8 @@ router.get('/today', async (req: Request, res: Response) => {
       }
     } else {
       today = new Date();
+      today.setUTCHours(0, 0, 0, 0);
     }
-    today.setHours(0, 0, 0, 0);
 
     const attendanceRecords = await prisma.attendance.findMany({
       where: {
@@ -385,6 +389,194 @@ router.get('/today', async (req: Request, res: Response) => {
     return res.status(500).json({
       success: false,
       error: 'Internal server error while fetching attendance data'
+    });
+  }
+});
+
+// PUT /attendance/update - Manually update attendance by roll number, subject, and date
+router.put('/update', async (req: Request, res: Response) => {
+  try {
+    const { rollNumber, subjectName, date, status, remarks } = req.body;
+
+    // Validate required fields
+    if (!rollNumber || !subjectName || !date || !status) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: rollNumber, subjectName, date, status'
+      });
+    }
+
+    // Validate status
+    if (!['PRESENT', 'ABSENT', 'LATE'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid status. Must be PRESENT, ABSENT, or LATE'
+      });
+    }
+
+    // Parse and validate date
+    let attendanceDate: Date;
+    try {
+      const dateParts = date.split('-');
+      if (dateParts.length !== 3) {
+        throw new Error('Invalid date format');
+      }
+      attendanceDate = new Date(Date.UTC(parseInt(dateParts[0]), parseInt(dateParts[1]) - 1, parseInt(dateParts[2])));
+      if (isNaN(attendanceDate.getTime())) {
+        throw new Error('Invalid date');
+      }
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid date format. Use YYYY-MM-DD format'
+      });
+    }
+
+    // Find student by roll number
+    const student = await prisma.student.findFirst({
+      where: { 
+        rollNumber: rollNumber,
+        isActive: true
+      },
+      include: {
+        branch: {
+          select: {
+            name: true,
+            code: true
+          }
+        }
+      }
+    });
+
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        error: 'Student not found with this roll number'
+      });
+    }
+
+    // Find active timetable for student's branch and semester
+    const activeTimetable = await prisma.timetable.findFirst({
+    });
+
+    if (!activeTimetable) {
+      return res.status(404).json({
+        success: false,
+        error: 'No active timetable found for this student\'s branch and semester'
+      });
+    }
+
+    // Find time slot by subject name for the given date
+    const dayOfWeek = attendanceDate.getUTCDay() === 0 ? 7 : attendanceDate.getUTCDay();
+    
+    const timeSlot = await prisma.timeSlot.findFirst({
+      where: {
+        timetableId: activeTimetable.id,
+        dayOfWeek: dayOfWeek,
+        isActive: true,
+        subject: {
+          OR: [
+            { name: { contains: subjectName, mode: 'insensitive' } },
+            { code: { contains: subjectName, mode: 'insensitive' } }
+          ]
+        }
+      },
+      include: {
+        subject: {
+          select: {
+            id: true,
+            name: true,
+            code: true
+          }
+        }
+      }
+    });
+
+    if (!timeSlot) {
+      return res.status(404).json({
+        success: false,
+        error: `No time slot found for subject "${subjectName}" on ${getDayName(dayOfWeek)}`
+      });
+    }
+
+    // Check if attendance record already exists
+    let existingAttendance = await prisma.attendance.findUnique({
+      where: {
+        studentId_timeSlotId_date: {
+          studentId: student.id,
+          timeSlotId: timeSlot.id,
+          date: attendanceDate
+        }
+      }
+    });
+
+    const attendanceData = {
+      studentId: student.id,
+      timeSlotId: timeSlot.id,
+      date: attendanceDate,
+      status: status as 'PRESENT' | 'ABSENT' | 'LATE',
+      markedBy: 'manual_update',
+      remarks: remarks || `Manually updated to ${status}`
+    };
+
+    let attendance;
+
+    if (existingAttendance) {
+      // Update existing attendance
+      attendance = await prisma.attendance.update({
+        where: { id: existingAttendance.id },
+        data: {
+          ...attendanceData,
+          checkInTime: status !== 'ABSENT' ? (existingAttendance.checkInTime || new Date()) : null,
+          remarks: `${existingAttendance.remarks || ''} | Updated to ${status} manually`.trim()
+        }
+      });
+    } else {
+      // Create new attendance record
+      attendance = await prisma.attendance.create({
+        data: {
+          ...attendanceData,
+          checkInTime: status !== 'ABSENT' ? new Date() : null,
+        }
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `Attendance ${existingAttendance ? 'updated' : 'created'} successfully`,
+      data: {
+        student: {
+          id: student.id,
+          name: student.name,
+          rollNumber: student.rollNumber,
+          branch: student.branch,
+          semester: student.semester
+        },
+        timeSlot: {
+          id: timeSlot.id,
+          subject: timeSlot.subject,
+          inchargeName: timeSlot.inchargeName,
+          timeSlot: `${timeSlot.startTime} - ${timeSlot.endTime}`,
+          dayOfWeek: getDayName(timeSlot.dayOfWeek),
+          roomNumber: timeSlot.roomNumber,
+          scheduleType: timeSlot.scheduleType
+        },
+        attendance: {
+          id: attendance.id,
+          date: attendance.date,
+          status: attendance.status,
+          checkInTime: attendance.checkInTime,
+          remarks: attendance.remarks,
+          wasUpdated: !!existingAttendance
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Error updating attendance:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Internal server error while updating attendance'
     });
   }
 });
