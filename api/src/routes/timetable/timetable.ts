@@ -152,16 +152,10 @@ router.post('/create', async (req: Request, res: Response) => {
 
     // Create timetable with time slots in transaction
     const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      // Deactivate any existing active timetables for this branch/semester
-      await tx.timetable.updateMany({
-        where: {
-          branchId,
-          semester,
-          academicYear,
-          isActive: true
-        },
-        data: { isActive: false }
-      });
+      // Delete ALL existing timetables (only one timetable should exist at a time)
+      // First delete all time slots, then delete all timetables
+      await tx.timeSlot.deleteMany({});
+      await tx.timetable.deleteMany({});
 
       // Create new timetable
       const newTimetable = await tx.timetable.create({
@@ -244,6 +238,123 @@ router.post('/create', async (req: Request, res: Response) => {
     return res.status(500).json({
       success: false,
       error: 'Internal server error while creating timetable'
+    });
+  }
+});
+
+// GET /timetable/all - Get all timetables with optional filters
+router.get('/all', async (req: Request, res: Response) => {
+  try {
+    const { branchId, semester, isActive, page = 1, limit = 50 } = req.query;
+
+    const where: any = {};
+    if (branchId) where.branchId = parseInt(branchId as string);
+    if (semester) where.semester = parseInt(semester as string);
+    if (isActive !== undefined) where.isActive = isActive === 'true';
+
+    const pageNum = parseInt(page as string) || 1;
+    const limitNum = parseInt(limit as string) || 50;
+    const skip = (pageNum - 1) * limitNum;
+
+    const [timetables, totalCount] = await Promise.all([
+      prisma.timetable.findMany({
+        where,
+        include: {
+          branch: {
+            select: {
+              id: true,
+              name: true,
+              code: true
+            }
+          },
+          timeSlots: {
+            include: {
+              subject: {
+                select: {
+                  id: true,
+                  name: true,
+                  code: true
+                }
+              }
+            },
+            orderBy: [
+              { dayOfWeek: 'asc' },
+              { startTime: 'asc' }
+            ]
+          },
+          _count: {
+            select: {
+              timeSlots: true
+            }
+          }
+        },
+        orderBy: [
+          { isActive: 'desc' },
+          { createdAt: 'desc' }
+        ],
+        skip,
+        take: limitNum
+      }),
+      prisma.timetable.count({ where })
+    ]);
+
+    const totalPages = Math.ceil(totalCount / limitNum);
+
+    // Format timetables with weekly schedule
+    const formattedTimetables = timetables.map((timetable: any) => {
+      const weeklySchedule: any = {};
+      const days = ['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+      
+      timetable.timeSlots.forEach((slot: any) => {
+        const dayName = days[slot.dayOfWeek];
+        if (!weeklySchedule[dayName]) {
+          weeklySchedule[dayName] = [];
+        }
+        weeklySchedule[dayName].push({
+          id: slot.id,
+          subject: slot.subject,
+          inchargeName: slot.inchargeName,
+          startTime: slot.startTime,
+          endTime: slot.endTime,
+          roomNumber: slot.roomNumber,
+          scheduleType: slot.scheduleType,
+          isActive: slot.isActive
+        });
+      });
+
+      return {
+        id: timetable.id,
+        name: timetable.name,
+        branch: timetable.branch,
+        semester: timetable.semester,
+        academicYear: timetable.academicYear,
+        isActive: timetable.isActive,
+        weeklySchedule,
+        totalSlots: timetable._count.timeSlots,
+        createdAt: timetable.createdAt,
+        updatedAt: timetable.updatedAt
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        timetables: formattedTimetables,
+        pagination: {
+          currentPage: pageNum,
+          totalPages,
+          totalCount,
+          hasNextPage: pageNum < totalPages,
+          hasPreviousPage: pageNum > 1
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching all timetables:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Internal server error while fetching timetables'
     });
   }
 });
