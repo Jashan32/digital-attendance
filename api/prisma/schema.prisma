@@ -1,0 +1,185 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Branch/Department Model
+model Branch {
+  id          Int    @id @default(autoincrement())
+  name        String    @unique // e.g., "Computer Science", "Electrical Engineering"
+  code        String    @unique // e.g., "CS", "EE"
+  description String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Relations
+  students    Student[]
+  subjects    Subject[]
+  timetables  Timetable[]
+
+  @@map("branches")
+}
+
+// Subject Model
+model Subject {
+  id          Int       @id @default(autoincrement())
+  name        String    // e.g., "Data Structures", "Digital Logic"
+  code        String    @unique // e.g., "CS101", "EE201"
+  credits     Int       @default(3)
+  semester    Int       // 1-8
+  branchId    Int
+  description String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Relations
+  branch      Branch      @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  schedules   Schedule[]
+  timeSlots   TimeSlot[]
+
+  @@map("subjects")
+}
+
+// Student Model
+model Student {
+  id             Int       @id @default(autoincrement())
+  name           String
+  rollNumber     String    @unique
+  email          String?   @unique
+  phone          String?
+  branchId       Int
+  semester       Int       // Current semester (1-8)
+  fingerId       Int       @unique // Unique fingerprint identifier (numeric ID from scanner)
+  fingerPrintId  String?   @unique // Optional: string-based fingerprint identifier for backup
+  isActive       Boolean   @default(true)
+  admissionYear  Int       // Year of admission
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  // Relations
+  branch         Branch       @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  attendances    Attendance[]
+
+  @@map("students")
+}
+
+// Timetable Model - Represents the overall timetable for a semester/branch
+model Timetable {
+  id           Int       @id @default(autoincrement())
+  name         String    // e.g., "CS Semester 3 - Fall 2023"
+  branchId     Int
+  semester     Int       // 1-8
+  academicYear String    // e.g., "2023-24"
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  // Relations
+  branch       Branch       @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  timeSlots    TimeSlot[]
+
+  @@map("timetables")
+}
+
+// TimeSlot Model - Individual class sessions within a timetable
+model TimeSlot {
+  id             Int       @id @default(autoincrement())
+  timetableId    Int
+  subjectId      Int
+  inchargeName   String    // Teacher/Faculty name
+  inchargeId     String?   // Optional: if you have a separate Teacher model
+  dayOfWeek      Int       // 1=Monday, 2=Tuesday, ..., 7=Sunday
+  startTime      String    // e.g., "09:00" (24-hour format)
+  endTime        String    // e.g., "10:00"
+  roomNumber     String?   // Classroom/Lab number
+  scheduleType   ScheduleType @default(LECTURE)
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  // Relations
+  timetable      Timetable    @relation(fields: [timetableId], references: [id], onDelete: Cascade)
+  subject        Subject      @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  attendances    Attendance[]
+
+  // Ensure no time conflicts within same timetable and day
+  @@unique([timetableId, dayOfWeek, startTime])
+  @@map("time_slots")
+}
+
+// Legacy Schedule Model - Keep for backward compatibility, but deprecated
+model Schedule {
+  id             Int       @id @default(autoincrement())
+  subjectId      Int
+  inchargeName   String    // Teacher/Faculty name
+  inchargeId     String?   // Optional: if you have a separate Teacher model
+  dayOfWeek      Int       // 1=Monday, 2=Tuesday, ..., 7=Sunday
+  startTime      String    // e.g., "09:00" (24-hour format)
+  endTime        String    // e.g., "10:00"
+  roomNumber     String?   // Classroom/Lab number
+  scheduleType   ScheduleType @default(LECTURE)
+  semester       Int       // Which semester this schedule is for
+  academicYear   String    // e.g., "2023-24"
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  // Relations
+  subject        Subject      @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  attendances    Attendance[]
+
+  @@map("schedules")
+}
+
+// Attendance Model
+model Attendance {
+  id           Int            @id @default(autoincrement())
+  studentId    Int
+  timeSlotId   Int?           // New: for timetable-based attendance
+  scheduleId   Int?           // Legacy: for backward compatibility
+  date         DateTime       @db.Date
+  checkInTime  DateTime?      // When student checked in
+  checkOutTime DateTime?      // When student checked out
+  status       AttendanceStatus @default(ABSENT)
+  markedBy     String?        // How attendance was marked (fingerprint, manual, etc.)
+  remarks      String?        // Optional remarks
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  // Relations
+  student      Student        @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  timeSlot     TimeSlot?      @relation(fields: [timeSlotId], references: [id], onDelete: Cascade)
+  schedule     Schedule?      @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+
+  // Ensure one attendance record per student per time slot per date
+  @@unique([studentId, timeSlotId, date])
+  // Legacy unique constraint for schedules
+  @@unique([studentId, scheduleId, date])
+  @@map("attendances")
+}
+
+// Enums
+enum ScheduleType {
+  LECTURE
+  PRACTICAL
+  TUTORIAL
+  SEMINAR
+  EXAM
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  EXCUSED
+}
