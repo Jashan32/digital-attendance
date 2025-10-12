@@ -218,7 +218,6 @@ router.get('/attendance/detailed', async (req: Request, res: Response) => {
       date: record.date,
       status: record.status,
       checkInTime: record.checkInTime,
-      checkOutTime: record.checkOutTime,
       student: {
         name: record.student.name,
         rollNumber: record.student.rollNumber,
@@ -240,7 +239,7 @@ router.get('/attendance/detailed', async (req: Request, res: Response) => {
       // Generate CSV format
       const csvHeaders = [
         'Date', 'Student Name', 'Roll Number', 'Branch', 'Subject', 
-        'Status', 'Check In', 'Check Out', 'Incharge', 'Room', 'Remarks'
+        'Status', 'Check In', 'Incharge', 'Room', 'Remarks'
       ].join(',');
 
       const csvRows = formattedRecords.map((record: any) => [
@@ -251,7 +250,6 @@ router.get('/attendance/detailed', async (req: Request, res: Response) => {
         record.subject.code,
         record.status,
         record.checkInTime || '',
-        record.checkOutTime || '',
         record.schedule.inchargeName,
         record.schedule.roomNumber || '',
         record.remarks || ''
@@ -417,7 +415,6 @@ router.get('/student/:studentId/attendance', async (req: Request, res: Response)
           date: record.date,
           status: record.status,
           checkInTime: record.checkInTime,
-          checkOutTime: record.checkOutTime,
           subject: record.schedule.subject,
           remarks: record.remarks
         })),

@@ -149,7 +149,6 @@ model Attendance {
   scheduleId   Int?           // Legacy: for backward compatibility
   date         DateTime       @db.Date
   checkInTime  DateTime?      // When student checked in
-  checkOutTime DateTime?      // When student checked out
   status       AttendanceStatus @default(ABSENT)
   markedBy     String?        // How attendance was marked (fingerprint, manual, etc.)
   remarks      String?        // Optional remarks

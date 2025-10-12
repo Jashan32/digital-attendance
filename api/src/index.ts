@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import https from 'https';
 import fs from 'fs';
+import os from 'os';
 import express from 'express';
 import cors from 'cors';
 import { setScheduleRouter } from './routes/schedule/setSchedule';
@@ -69,6 +70,23 @@ app.use("/timetable", timetableRouter);
 //     app
 // );
 
-app.listen(3003, () => {
-    console.log('HTTP Express server running at http://localhost:3003');
+// Function to get local IP address
+function getLocalIP() {
+    const interfaces = os.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+        for (const iface of interfaces[name]!) {
+            if (iface.family === 'IPv4' && !iface.internal) {
+                return iface.address;
+            }
+        }
+    }
+    return 'localhost';
+}
+
+app.listen(3003, '0.0.0.0', () => {
+    const localIP = getLocalIP();
+    console.log('🚀 HTTP Express server running');
+    console.log('📍 Local access: http://localhost:3003');
+    console.log(`🌐 Network access: http://${localIP}:3003`);
+    console.log('---');
 });

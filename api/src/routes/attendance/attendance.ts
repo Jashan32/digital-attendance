@@ -21,7 +21,7 @@ router.post('/scan', async (req: Request, res: Response) => {
 
     // Validate required fields
     if (!fingerId || !timestamp) {
-      return res.status(400).json({
+      return res.status(401).json({
         success: false,
         error: 'Missing required fields: fingerId, timestamp'
       });
@@ -30,7 +30,7 @@ router.post('/scan', async (req: Request, res: Response) => {
     // Parse and validate timestamp
     const scanTime = new Date(timestamp);
     if (isNaN(scanTime.getTime())) {
-      return res.status(400).json({
+      return res.status(402).json({
         success: false,
         error: 'Invalid timestamp format. Use ISO 8601 format (e.g., 2025-10-08T18:35:00Z)'
       });
@@ -41,7 +41,7 @@ router.post('/scan', async (req: Request, res: Response) => {
     if (currentDateTime) {
       systemTime = new Date(currentDateTime);
       if (isNaN(systemTime.getTime())) {
-        return res.status(400).json({
+        return res.status(403).json({
           success: false,
           error: 'Invalid currentDateTime format. Use ISO 8601 format (e.g., 2025-10-08T09:30:00Z)'
         });
@@ -71,7 +71,7 @@ router.post('/scan', async (req: Request, res: Response) => {
     }
 
     if (!student.isActive) {
-      return res.status(403).json({
+      return res.status(405).json({
         success: false,
         error: 'Student account is inactive'
       });
@@ -81,11 +81,11 @@ router.post('/scan', async (req: Request, res: Response) => {
     const currentDay = systemTime.getUTCDay(); // 0=Sunday, 1=Monday, ..., 6=Saturday
     const currentTimeStr = `${systemTime.getUTCHours().toString().padStart(2, '0')}:${systemTime.getUTCMinutes().toString().padStart(2, '0')}`; // HH:MM format in UTC
     const currentMinutes = getMinutesFromTimeString(currentTimeStr);
-    
+
     // Also get scan time details for recording
     const scanTimeStr = `${scanTime.getUTCHours().toString().padStart(2, '0')}:${scanTime.getUTCMinutes().toString().padStart(2, '0')}`; // HH:MM format in UTC
     const scanMinutes = getMinutesFromTimeString(scanTimeStr);
-    
+
     // Convert JS day format to our format (1=Monday, 7=Sunday)
     const dayOfWeek = currentDay === 0 ? 7 : currentDay;
 
@@ -94,7 +94,7 @@ router.post('/scan', async (req: Request, res: Response) => {
     });
 
     if (!activeTimetable) {
-      return res.status(404).json({
+      return res.status(406).json({
         success: false,
         error: 'No active timetable found for this student\'s branch and semester'
       });
@@ -118,7 +118,7 @@ router.post('/scan', async (req: Request, res: Response) => {
     });
 
     if (matchingTimeSlots.length === 0) {
-      return res.status(400).json({
+      return res.status(407).json({
         success: false,
         error: `No classes scheduled for today (${getDayName(dayOfWeek)})`
       });
@@ -132,7 +132,7 @@ router.post('/scan', async (req: Request, res: Response) => {
     for (const slot of matchingTimeSlots) {
       const startMinutes = getMinutesFromTimeString(slot.startTime);
       const endMinutes = getMinutesFromTimeString(slot.endTime);
-      
+
       const earliestTime = startMinutes - earlyAllowance;
       const latestTime = endMinutes + lateAllowance;
 
@@ -144,11 +144,11 @@ router.post('/scan', async (req: Request, res: Response) => {
     }
 
     if (!currentTimeSlot) {
-      const availableSlots = matchingTimeSlots.map((slot: any) => 
+      const availableSlots = matchingTimeSlots.map((slot: any) =>
         `${slot.subject.name} (${slot.startTime}-${slot.endTime})`
       ).join(', ');
-      
-      return res.status(400).json({
+
+      return res.status(408).json({
         success: false,
         error: `No class found for current time (${currentTimeStr}). Today's classes: ${availableSlots}`
       });
@@ -156,7 +156,7 @@ router.post('/scan', async (req: Request, res: Response) => {
 
     // Use system date for attendance date (simulation date or server date) - using UTC to avoid timezone issues
     const attendanceDate = new Date(Date.UTC(systemTime.getUTCFullYear(), systemTime.getUTCMonth(), systemTime.getUTCDate()));
-    
+
     let existingAttendance = await prisma.attendance.findUnique({
       where: {
         studentId_timeSlotId_date: {
@@ -170,7 +170,7 @@ router.post('/scan', async (req: Request, res: Response) => {
     // Determine attendance status based on scan time vs class start time
     const startMinutes = getMinutesFromTimeString(currentTimeSlot.startTime);
     let attendanceStatus: 'PRESENT' | 'LATE' = 'PRESENT';
-    
+
     // Student is late if scan time is more than 10 minutes after start time
     if (scanMinutes > startMinutes + 10) {
       attendanceStatus = 'LATE';
@@ -188,26 +188,39 @@ router.post('/scan', async (req: Request, res: Response) => {
     let attendance;
 
     if (existingAttendance) {
-      // Update existing attendance
-      if (existingAttendance.checkInTime && !existingAttendance.checkOutTime) {
-        // This is a check-out
-        attendance = await prisma.attendance.update({
-          where: { id: existingAttendance.id },
-          data: {
-            checkOutTime: scanTime,
-            remarks: `${existingAttendance.remarks || ''} | Check-out at ${scanTimeStr} UTC`.trim()
+      // Check if attendance is already marked
+      return res.status(409).json({
+        success: false,
+        error: 'Already Marked',
+        message: `Attendance for ${student.name} in ${currentTimeSlot.subject.name} is already marked`,
+        data: {
+          student: {
+            id: student.id,
+            name: student.name,
+            rollNumber: student.rollNumber,
+            branch: student.branch,
+            semester: student.semester
+          },
+          timeSlot: {
+            id: currentTimeSlot.id,
+            subject: {
+              name: currentTimeSlot.subject.name,
+              code: currentTimeSlot.subject.code
+            },
+            inchargeName: currentTimeSlot.inchargeName,
+            timeSlot: `${currentTimeSlot.startTime} - ${currentTimeSlot.endTime}`,
+            dayOfWeek: getDayName(currentTimeSlot.dayOfWeek),
+            roomNumber: currentTimeSlot.roomNumber,
+            scheduleType: currentTimeSlot.scheduleType
+          },
+          existingAttendance: {
+            id: existingAttendance.id,
+            status: existingAttendance.status,
+            checkInTime: existingAttendance.checkInTime,
+            date: existingAttendance.date
           }
-        });
-      } else {
-        // Update existing check-in
-        attendance = await prisma.attendance.update({
-          where: { id: existingAttendance.id },
-          data: {
-            ...attendanceData,
-            checkInTime: scanTime,
-          }
-        });
-      }
+        }
+      });
     } else {
       // Create new attendance record
       attendance = await prisma.attendance.create({
@@ -219,11 +232,9 @@ router.post('/scan', async (req: Request, res: Response) => {
     }
 
     // Prepare response
-    const isCheckOut = existingAttendance?.checkInTime && !existingAttendance.checkOutTime;
-
     const response = {
       success: true,
-      message: isCheckOut ? 'Check-out recorded successfully' : 'Attendance marked successfully',
+      message: 'Attendance marked successfully',
       data: {
         student: {
           id: student.id,
@@ -249,9 +260,7 @@ router.post('/scan', async (req: Request, res: Response) => {
           date: attendance.date,
           status: attendance.status,
           checkInTime: attendance.checkInTime,
-          checkOutTime: attendance.checkOutTime,
           scanTime: scanTime,
-          scanType: isCheckOut ? 'check-out' : 'check-in',
           isLate: attendanceStatus === 'LATE',
           remarks: attendance.remarks
         },
@@ -265,8 +274,12 @@ router.post('/scan', async (req: Request, res: Response) => {
         }
       }
     };
-
-    return res.status(200).json(response);
+    if (attendanceStatus == 'PRESENT') {
+      return res.status(200).json(response);
+    }
+    else if (attendanceStatus == 'LATE') {
+      return res.status(201).json(response);
+    }
 
   } catch (error) {
     console.error('Error processing fingerprint scan:', error);
@@ -283,7 +296,7 @@ router.post('/scan', async (req: Request, res: Response) => {
 router.get('/today', async (req: Request, res: Response) => {
   try {
     const { currentDate } = req.query;
-    
+
     // Use simulation date from frontend, or server date as fallback
     let today: Date;
     if (currentDate) {
@@ -378,7 +391,6 @@ router.get('/today', async (req: Request, res: Response) => {
           },
           status: record.status,
           checkInTime: record.checkInTime,
-          checkOutTime: record.checkOutTime,
           remarks: record.remarks
         }))
       }
@@ -434,7 +446,7 @@ router.put('/update', async (req: Request, res: Response) => {
 
     // Find student by roll number
     const student = await prisma.student.findFirst({
-      where: { 
+      where: {
         rollNumber: rollNumber,
         isActive: true
       },
@@ -468,7 +480,7 @@ router.put('/update', async (req: Request, res: Response) => {
 
     // Find time slot by subject name for the given date
     const dayOfWeek = attendanceDate.getUTCDay() === 0 ? 7 : attendanceDate.getUTCDay();
-    
+
     const timeSlot = await prisma.timeSlot.findFirst({
       where: {
         timetableId: activeTimetable.id,
@@ -522,13 +534,47 @@ router.put('/update', async (req: Request, res: Response) => {
     let attendance;
 
     if (existingAttendance) {
-      // Update existing attendance
+      // Check if trying to set the same status
+      if (existingAttendance.status === status) {
+        return res.status(400).json({
+          success: false,
+          error: 'Attendance already marked with same status',
+          message: `Attendance for ${student.name} in ${timeSlot.subject.name} is already marked as ${status}`,
+          data: {
+            student: {
+              id: student.id,
+              name: student.name,
+              rollNumber: student.rollNumber,
+              branch: student.branch,
+              semester: student.semester
+            },
+            timeSlot: {
+              id: timeSlot.id,
+              subject: timeSlot.subject,
+              inchargeName: timeSlot.inchargeName,
+              timeSlot: `${timeSlot.startTime} - ${timeSlot.endTime}`,
+              dayOfWeek: getDayName(timeSlot.dayOfWeek),
+              roomNumber: timeSlot.roomNumber,
+              scheduleType: timeSlot.scheduleType
+            },
+            existingAttendance: {
+              id: existingAttendance.id,
+              status: existingAttendance.status,
+              checkInTime: existingAttendance.checkInTime,
+              date: existingAttendance.date,
+              remarks: existingAttendance.remarks
+            }
+          }
+        });
+      }
+
+      // Update existing attendance with different status
       attendance = await prisma.attendance.update({
         where: { id: existingAttendance.id },
         data: {
           ...attendanceData,
           checkInTime: status !== 'ABSENT' ? (existingAttendance.checkInTime || new Date()) : null,
-          remarks: `${existingAttendance.remarks || ''} | Updated to ${status} manually`.trim()
+          remarks: `${existingAttendance.remarks || ''} | Updated from ${existingAttendance.status} to ${status} manually`.trim()
         }
       });
     } else {
@@ -585,12 +631,12 @@ router.put('/update', async (req: Request, res: Response) => {
 router.get('/student/:studentId', async (req: Request, res: Response) => {
   try {
     const { studentId } = req.params;
-    const { 
-      startDate, 
-      endDate, 
-      status, 
-      page = 1, 
-      limit = 50 
+    const {
+      startDate,
+      endDate,
+      status,
+      page = 1,
+      limit = 50
     } = req.query;
 
     const studentIdNum = parseInt(studentId);
@@ -659,7 +705,6 @@ router.get('/student/:studentId', async (req: Request, res: Response) => {
           date: record.date,
           status: record.status,
           checkInTime: record.checkInTime,
-          checkOutTime: record.checkOutTime,
           timeSlot: {
             subject: record.timeSlot.subject,
             timeSlot: `${record.timeSlot.startTime} - ${record.timeSlot.endTime}`,

@@ -188,7 +188,6 @@ export interface AttendanceRecord {
   date: string;
   status: 'PRESENT' | 'ABSENT' | 'LATE' | 'EXCUSED';
   checkInTime?: string;
-  checkOutTime?: string;
   remarks?: string;
 }
 

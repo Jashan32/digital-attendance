@@ -395,7 +395,6 @@ router.get('/:id', async (req: Request, res: Response) => {
                         date: attendance.date,
                         status: attendance.status,
                         checkInTime: attendance.checkInTime,
-                        checkOutTime: attendance.checkOutTime,
                         subject: {
                             name: attendance.timeSlot ? attendance.timeSlot.subject.name : attendance.schedule?.subject.name,
                             code: attendance.timeSlot ? attendance.timeSlot.subject.code : attendance.schedule?.subject.code
@@ -467,6 +466,58 @@ router.get('/fingerprint/:fingerId', async (req: Request, res: Response) => {
         return res.status(500).json({
             success: false,
             error: 'Internal server error while fetching student'
+        });
+    }
+});
+
+// DELETE /student/delete-all - Delete ALL student data (DANGEROUS!)
+// WARNING: This endpoint will permanently delete ALL student records and their attendance data
+// Requires confirmation parameter to prevent accidental deletion
+// Example: DELETE /student/delete-all?confirm=DELETE_ALL_STUDENT_DATA
+router.delete('/delete-all', async (req: Request, res: Response) => {
+    try {
+        const { confirm } = req.query;
+        console.log("delete data req receved")
+
+        // Safety check - require explicit confirmation
+        if (confirm !== 'DELETE_ALL_STUDENT_DATA') {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing or invalid confirmation parameter',
+                message: 'To delete all student data, add query parameter: ?confirm=DELETE_ALL_STUDENT_DATA',
+                warning: 'This operation will permanently delete ALL student records and their attendance data!'
+            });
+        }
+
+        // Get counts before deletion for reporting
+        const [studentCount, attendanceCount] = await Promise.all([
+            prisma.student.count(),
+            prisma.attendance.count()
+        ]);
+
+        // Delete all attendance records first (due to foreign key constraints)
+        const deletedAttendance = await prisma.attendance.deleteMany({});
+
+        // Delete all students
+        const deletedStudents = await prisma.student.deleteMany({});
+
+        return res.status(200).json({
+            success: true,
+            message: 'All student data deleted successfully',
+            warning: 'This action cannot be undone!',
+            deletedCounts: {
+                students: deletedStudents.count,
+                attendanceRecords: deletedAttendance.count
+            },
+            timestamp: new Date().toISOString()
+        });
+
+    } catch (error) {
+        console.error('Error deleting all student data:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Internal server error while deleting student data',
+            message: 'Failed to delete student data. Some data may have been partially deleted.'
         });
     }
 });
